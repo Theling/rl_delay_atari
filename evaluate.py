@@ -6,26 +6,16 @@ from stable_baselines.common.policies import CnnLnLstmPolicy
 from stable_baselines import logger, A2C
 from stable_baselines import DQN
 from stable_baselines.deepq.policy_iteration import PI
-from stable_baselines.deepq.delayed_dqn import DelayedDQN
-
+from stable_baselines.deepq.delayed_dqn import DelayedDQN, METHOD
 from stable_baselines.common.atari_wrappers import make_atari, DelayWrapper, MaxAndSkipEnv, wrap_deepmind
-from stable_baselines.common.callbacks import ModelSaveCallback
+from stable_baselines.common.callbacks import CheckpointCallback
 from stable_baselines.common.vec_env import VecFrameStack, VecNormalize, SubprocVecEnv
 from functools import partial
 import numpy as np
 import sys
-import os
 
 env_name = sys.argv[1] + '-v0'
-METHOD = "SMBS" 
-# METHOD = "Delayed_Q"
 
-if METHOD == "SMBS":
-    from stable_baselines.deepq.build_graph import build_train
-elif METHOD == "Delayed_Q":
-    from stable_baselines.deepq.build_graph_original import build_train
-else:
-    raise
 
 
 AVERAGE_OVER_LAST_EP = 0.05
@@ -40,7 +30,7 @@ def make_delayed_env(config):
     env = DelayWrapper(env, config.delay_value, config.clone_full_state)
     return env
 
-AGENT_NAME = ''
+AGENT_NAME = 'agent_'
 import platform
 if platform.system() == 'Darwin':
     import os
@@ -80,15 +70,11 @@ config = wandb.config
 
 #TODO: check if using fixed 4-frame skip is better
 # env = make_atari('BreakoutNoFrameskip-v4')
-agent_full_name = wandb.run.id + '_' + \
-                    AGENT_NAME + METHOD + '_' + \
-                    env_name + \
-                    "_d" + hyperparameter_defaults['delay_value'] + \
-                    f"_r{hyperparameter_defaults['sticky_action']:.2f}" 
+agent_full_name = wandb.run.id + '_' + AGENT_NAME + METHOD + '_' + env_name
 # Save a checkpoint every 1000 steps
-checkpoint_callback = ModelSaveCallback(save_path=f'./logs/{agent_full_name}/',
-                                         name_prefix='best')
-# checkpoint_callback = None
+# checkpoint_callback = CheckpointCallback(save_freq=30*1800, save_path='./logs/',
+#                                          name_prefix=agent_full_name)
+checkpoint_callback = None
 # model = DQN(LnCnnPolicy, env, verbose=1, train_freq=config.train_freq, learning_rate=config.learning_rate,
 #                 double_q=True, target_network_update_freq=config.target_network_update_freq,
 #             gamma=config.gamma, prioritized_replay=True, exploration_initial_eps=config.exploration_initial_eps,
@@ -109,7 +95,7 @@ else:
         is_delayed_agent = False
         is_delayed_augmented_agent = False
 
-    model = DelayedDQN(LnCnnPolicy, env, build_train=build_train, verbose=1, train_freq=config.train_freq, learning_rate=config.learning_rate,
+    model = DelayedDQN(LnCnnPolicy, env, verbose=1, train_freq=config.train_freq, learning_rate=config.learning_rate,
                     double_q=True, target_network_update_freq=config.target_network_update_freq,
                 gamma=config.gamma, prioritized_replay=config.prioritized_replay, exploration_initial_eps=config.exploration_initial_eps,
                 exploration_final_eps=config.exploration_final_eps, delay_value=config.delay_value,
@@ -122,8 +108,7 @@ avg_over = round(tot_ep_num * AVERAGE_OVER_LAST_EP)
 final_avg_score = np.mean(episode_rewards[-avg_over:])
 wandb.log({'final_score': final_avg_score})
 
-path = os.path.join(checkpoint_callback.save_path, 'final')
-model.save(path)
+model.save(agent_full_name+'_final')
 
 # del model # remove to demonstrate saving and loading
 #
