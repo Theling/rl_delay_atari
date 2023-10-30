@@ -9,7 +9,8 @@ from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, Ten
 from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.common.schedules import LinearSchedule
 from stable_baselines.common.buffers import ReplayBuffer, PrioritizedReplayBuffer
-from stable_baselines.deepq.build_graph import build_train
+# from stable_baselines.deepq.build_graph import build_train; METHOD = "SMBS"
+# from stable_baselines.deepq.build_graph_original import build_train; METHOD = "Delayed_Q"
 from stable_baselines.deepq.policies import DQNPolicy
 import wandb
 from tqdm import tqdm
@@ -58,7 +59,7 @@ class DelayedDQN(OffPolicyRLModel):
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
     """
-    def __init__(self, policy, env, gamma=0.99, learning_rate=5e-4, buffer_size=50000, exploration_fraction=0.1,
+    def __init__(self, policy, env, build_train, gamma=0.99, learning_rate=5e-4, buffer_size=50000, exploration_fraction=0.1,
                  exploration_final_eps=0.02, exploration_initial_eps=1.0, train_freq=1, batch_size=32, double_q=True,
                  learning_starts=1000, target_network_update_freq=500, prioritized_replay=False,
                  prioritized_replay_alpha=0.6, prioritized_replay_beta0=0.4, prioritized_replay_beta_iters=None,
@@ -66,7 +67,7 @@ class DelayedDQN(OffPolicyRLModel):
                  n_cpu_tf_sess=None, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, seed=None,
                  delay_value=0, forward_model=None, load_pretrained_agent=True, is_delayed_agent=True,
-                 is_delayed_augmented_agent=False):
+                 is_delayed_augmented_agent=False, num_traj = 20):
 
         policy = partial(policy, is_delayed_agent=is_delayed_agent,
                          is_delayed_augmented_agent=is_delayed_augmented_agent, delay_value=delay_value)
@@ -75,6 +76,7 @@ class DelayedDQN(OffPolicyRLModel):
         super(DelayedDQN, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, policy_base=DQNPolicy,
                                   requires_vec_env=False, policy_kwargs=policy_kwargs, seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
 
+        self.build_train = build_train
         self.param_noise = param_noise
         self.learning_starts = learning_starts
         self.train_freq = train_freq
@@ -97,6 +99,9 @@ class DelayedDQN(OffPolicyRLModel):
         self.delay_value = delay_value
         self.sample_buffer = deque()
         self.forward_model = forward_model
+        
+        self.num_traj = num_traj
+        
         if self.forward_model is None:
             self.use_learned_forward_model = True
             #TODO: define and build forward_model here
@@ -151,7 +156,7 @@ class DelayedDQN(OffPolicyRLModel):
 
                 optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
 
-                self.act, self._train_step, self.update_target, self.step_model, self.pretrained_model = build_train(
+                self.act, self._train_step, self.update_target, self.step_model, self.pretrained_model = self.build_train(
                     q_func=partial(self.policy, **self.policy_kwargs),
                     ob_space=self.observation_space,
                     ac_space=self.action_space,
@@ -220,6 +225,7 @@ class DelayedDQN(OffPolicyRLModel):
                                               final_p=self.exploration_final_eps)
 
             episode_rewards = [0.0]
+            # safe_mean_50 = lambda rewards: np.mean(episode_rewards) if len(episode_rewards) < 50 else np.mean(episode_rewards[-50:-1])
             episode_successes = []
 
             callback.on_training_start(locals(), globals())
@@ -237,7 +243,7 @@ class DelayedDQN(OffPolicyRLModel):
                     # self.load_pretrained_model('pretrained_delay_0_step_' + str(timestep))
 
                 # Take action and update exploration to the newest value
-                kwargs = {}
+                kwargs = {"num_traj": self.num_traj}
                 if not self.param_noise:
                     update_eps = self.exploration.value(self.num_timesteps)
                     update_param_noise_threshold = 0.
@@ -265,6 +271,9 @@ class DelayedDQN(OffPolicyRLModel):
                     action = self.act(np.array(obs)[None], update_eps=update_eps,
                                       pending_actions=pending_actions_reshaped,
                                       **kwargs)[0]
+                    # print("obs: ", np.array(obs)[None].shape)
+                    # print("q_values: ", q_values.shape)
+                    
                 env_action = action
                 reset = False
                 new_obs, rew, done, info = self.env.step(env_action)
@@ -313,6 +322,7 @@ class DelayedDQN(OffPolicyRLModel):
                         obs = self.env.reset()
                     self.sample_buffer.clear()
                     wandb.log({'episodic_reward': episode_rewards[-1]}, step=self.num_timesteps)
+                    wandb.log({'mean_episodic_reward': np.mean(episode_rewards[-50:])}, step=self.num_timesteps)
                     # print('episodic_reward: {}'.format(episode_rewards[-1]))
                     episode_rewards.append(0.0)
                     reset = True
@@ -381,9 +391,12 @@ class DelayedDQN(OffPolicyRLModel):
                     self.update_target(sess=self.sess)
 
                 if len(episode_rewards[-101:-1]) == 0:
-                    mean_100ep_reward = -np.inf
+                    max_mean_100ep_reward = mean_100ep_reward = -np.inf
                 else:
-                    mean_100ep_reward = round(float(np.mean(episode_rewards[-101:-1])), 1)
+                    mean_100ep_reward = round(float(np.mean(episode_rewards[-101:-1])), 3)
+                    if mean_100ep_reward > max_mean_100ep_reward:
+                        max_mean_100ep_reward = mean_100ep_reward
+                        callback.call('save')
                 # print(update_eps)
                 num_episodes = len(episode_rewards)
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
@@ -392,6 +405,7 @@ class DelayedDQN(OffPolicyRLModel):
                     if len(episode_successes) > 0:
                         logger.logkv("success rate", np.mean(episode_successes[-100:]))
                     logger.record_tabular("mean 100 episode reward", mean_100ep_reward)
+                    logger.record_tabular("max mean 100 episode reward", max_mean_100ep_reward)
                     logger.record_tabular("% time spent exploring",
                                           int(100 * self.exploration.value(self.num_timesteps)))
                     logger.dump_tabular()

@@ -122,7 +122,8 @@ class FeedForwardPolicy(DQNPolicy):
                 # num_outputs = self.n_actions
                 pending_actions_ph_len = self.delay_value if self.is_delayed_augmented_agent else 0
                 self.pending_actions_ph = tf.placeholder(tf.float32, [None, pending_actions_ph_len], name="pending_actions")
-                action_out = tf.concat((action_out, self.pending_actions_ph), axis=1)
+                if pending_actions_ph_len > 0 : 
+                    action_out = tf.concat((action_out, self.pending_actions_ph), axis=1)
                 action_scores = tf_layers.fully_connected(action_out, num_outputs=num_outputs, activation_fn=None)
 
             if self.dueling:

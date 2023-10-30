@@ -154,7 +154,7 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
         output_actions = tf.cond(stochastic_ph, lambda: stochastic_actions, lambda: deterministic_actions)
         update_eps_expr = eps.assign(tf.cond(update_eps_ph >= 0, lambda: update_eps_ph, lambda: eps))
         _act = tf_util.function(inputs=[policy.obs_ph, stochastic_ph, update_eps_ph, policy.pending_actions_ph],
-                                outputs=output_actions,
+                                outputs=[output_actions, policy.q_values],
                                 givens={update_eps_ph: -1.0, stochastic_ph: True},
                                 updates=[update_eps_expr])
         if not policy.is_delayed_agent:
@@ -182,7 +182,10 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
                 if len(last_state.shape) < 4:
                     last_state = np.array(last_state)[None]
                 pending_actions_empty = np.asarray([])[None]
-                return _act(last_state, stochastic, update_eps, pending_actions_empty)
+                action, q_values =  _act(last_state, stochastic, update_eps, pending_actions_empty)
+                return action
+    
+    
     else: #PI mode -- completely different action function
         _predict_v = tf_util.function(inputs=[policy.obs_ph], outputs=policy.q_values)
 
@@ -371,7 +374,7 @@ def build_act_with_param_noise(q_func, ob_space, ac_space, stochastic_ph, update
     ]
 
     _act = tf_util.function(inputs=[policy.obs_ph, stochastic_ph, update_eps_ph],
-                            outputs=output_actions,
+                            outputs=[output_actions, policy.q_values],
                             givens={update_eps_ph: -1.0, stochastic_ph: True},
                             updates=[update_eps_expr])
 

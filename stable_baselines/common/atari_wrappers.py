@@ -50,6 +50,7 @@ class FireResetEnv(gym.Wrapper):
         gym.Wrapper.__init__(self, env)
         assert env.unwrapped.get_action_meanings()[1] == 'FIRE'
         assert len(env.unwrapped.get_action_meanings()) >= 3
+        self._elapsed_steps = env._elapsed_steps
 
     def reset(self, **kwargs):
         self.env.reset(**kwargs)
@@ -76,6 +77,7 @@ class EpisodicLifeEnv(gym.Wrapper):
         gym.Wrapper.__init__(self, env)
         self.lives = 0
         self.was_real_done = True
+        self._elapsed_steps = env._elapsed_steps
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
@@ -189,6 +191,7 @@ class ClipRewardEnv(gym.RewardWrapper):
         :param env: (Gym Environment) the environment
         """
         gym.RewardWrapper.__init__(self, env)
+        self._elapsed_steps = env._elapsed_steps
 
     def reward(self, reward):
         """
@@ -211,6 +214,7 @@ class WarpFrame(gym.ObservationWrapper):
         self.height = 84
         self.observation_space = spaces.Box(low=0, high=255, shape=(self.height, self.width, 1),
                                             dtype=env.observation_space.dtype)
+        self._elapsed_steps = env._elapsed_steps
 
     def observation(self, frame):
         """
@@ -243,6 +247,8 @@ class FrameStack(gym.Wrapper):
         shp = env.observation_space.shape
         self.observation_space = spaces.Box(low=0, high=255, shape=(shp[0], shp[1], shp[2] * n_frames),
                                             dtype=env.observation_space.dtype)
+        
+        self._elapsed_steps = env._elapsed_steps
 
     def reset(self, **kwargs):
         obs = self.env.reset(**kwargs)
@@ -264,7 +270,8 @@ class ScaledFloatFrame(gym.ObservationWrapper):
     def __init__(self, env):
         gym.ObservationWrapper.__init__(self, env)
         self.observation_space = spaces.Box(low=0, high=1.0, shape=env.observation_space.shape, dtype=np.float32)
-
+        self._elapsed_steps = env._elapsed_steps
+        
     def observation(self, observation):
         # careful! This undoes the memory optimization, use
         # with smaller replay buffers only.
@@ -350,6 +357,35 @@ class DelayWrapper(gym.Env):
             return None
         return next_state
 
+class StickyActionEnv(gym.Wrapper):
+    """
+    Sticky action.
+
+    Paper: https://arxiv.org/abs/1709.06009
+    Official implementation: https://github.com/mgbellemare/Arcade-Learning-Environment
+
+    :param env: Environment to wrap
+    :param action_repeat_probability: Probability of repeating the last action
+    """
+
+    def __init__(self, env: gym.Env, action_repeat_probability: float) -> None:
+        super().__init__(env)
+        self.action_repeat_probability = action_repeat_probability
+        assert env.unwrapped.get_action_meanings()[0] == "NOOP"  # type: ignore[attr-defined]
+        
+        self._elapsed_steps = env._elapsed_steps
+
+    def reset(self, **kwargs):
+        self._sticky_action = 0  # NOOP
+        return self.env.reset(**kwargs)
+
+
+    def step(self, action: int):
+        if self.np_random.random() >= self.action_repeat_probability:
+            self._sticky_action = action
+        tmp =  self.env.step(self._sticky_action)
+        tmp[-1]['sticky_action'] = self._sticky_action
+        return tmp
 
 class LazyFrames(object):
     def __init__(self, frames):
@@ -400,7 +436,7 @@ def make_atari(env_id, noop_reset=True, max_skip=True):
     return env
 
 
-def wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=False, scale=False):
+def wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=False, scale=False, sticky_action = False):
     """
     Configure environment for DeepMind-style Atari.
 
@@ -422,4 +458,10 @@ def wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=False, 
         env = ClipRewardEnv(env)
     if frame_stack:
         env = FrameStack(env, 4)
+        
+    if sticky_action:
+        env = StickyActionEnv(env, action_repeat_probability = sticky_action)
     return env
+
+
+

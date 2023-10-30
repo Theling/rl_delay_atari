@@ -145,6 +145,7 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
     n_actions = ac_space.nvec if isinstance(ac_space, MultiDiscrete) else ac_space.n
 
     if not policy.policy_iteration_mode:
+        # tf.mean(policy.q_values)
         deterministic_actions = tf.argmax(policy.q_values, axis=1)
         batch_size = tf.shape(policy.obs_ph)[0]
         random_actions = tf.random_uniform(tf.stack([batch_size]), minval=0, maxval=n_actions, dtype=tf.int64)
@@ -154,7 +155,7 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
         output_actions = tf.cond(stochastic_ph, lambda: stochastic_actions, lambda: deterministic_actions)
         update_eps_expr = eps.assign(tf.cond(update_eps_ph >= 0, lambda: update_eps_ph, lambda: eps))
         _act = tf_util.function(inputs=[policy.obs_ph, stochastic_ph, update_eps_ph, policy.pending_actions_ph],
-                                outputs=output_actions,
+                                outputs=[output_actions, policy.q_values, chose_random, random_actions],
                                 givens={update_eps_ph: -1.0, stochastic_ph: True},
                                 updates=[update_eps_expr])
         if not policy.is_delayed_agent:
@@ -169,20 +170,41 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
             def act(obs, stochastic=True, update_eps=-1, pending_actions=None, **kwargs):
                 use_learned_forward_model = kwargs['use_learned_forward_model']
                 forward_model = kwargs['forward_model']
-                last_state = obs
+                
                 if not use_learned_forward_model:
                     forward_model.store_initial_state()
-                for i, curr_action in enumerate(pending_actions):
-                    last_state_temp = forward_model.get_next_state(state=last_state, action=curr_action)
-                    if last_state_temp is None:
-                        break
-                    last_state = last_state_temp
+                    
+                num_traj = kwargs['num_traj']
+                last_states = []
+                for traj in range(num_traj):
+                    last_state = obs
+                    for i, curr_action in enumerate(pending_actions):
+                        last_state_temp = forward_model.get_next_state(state=last_state, action=curr_action)
+                        if last_state_temp is None:
+                            break
+                        last_state = last_state_temp
+                    last_states.append(last_state)
+                    if not use_learned_forward_model:
+                        forward_model.restore_initial_state()
+                last_state = np.array(last_states).squeeze()
+                # print(last_state.shape)
+                
                 if not use_learned_forward_model:
                     forward_model.restore_initial_state()
                 if len(last_state.shape) < 4:
                     last_state = np.array(last_state)[None]
                 pending_actions_empty = np.asarray([])[None]
-                return _act(last_state, stochastic, update_eps, pending_actions_empty)
+                dir_action, q_values, chose_random, random_actions = _act(last_state, stochastic, update_eps, pending_actions_empty)
+                expected_action_val = q_values.mean(axis = 0)# -alpha*q_val.std(axis = 0)
+                action =  expected_action_val.argmax()
+                
+                action = random_actions[-1] if chose_random[-1] else action
+                
+                # print(abs(q_values[0, :] - q_values[-1, :]))
+                # print(q_values.shape, expected_action_val, action, dir_action.mean(), chose_random.shape, random_actions.shape )
+                return [action]
+            
+            
     else: #PI mode -- completely different action function
         _predict_v = tf_util.function(inputs=[policy.obs_ph], outputs=policy.q_values)
 
