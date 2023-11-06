@@ -67,7 +67,7 @@ class DelayedDQN(OffPolicyRLModel):
                  n_cpu_tf_sess=None, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, seed=None,
                  delay_value=0, forward_model=None, load_pretrained_agent=True, is_delayed_agent=True,
-                 is_delayed_augmented_agent=False, num_traj = 20):
+                 is_delayed_augmented_agent=False, num_traj = 50):
 
         policy = partial(policy, is_delayed_agent=is_delayed_agent,
                          is_delayed_augmented_agent=is_delayed_augmented_agent, delay_value=delay_value)
@@ -266,8 +266,11 @@ class DelayedDQN(OffPolicyRLModel):
                     pending_actions = self.env.get_pending_actions(self.pretrained_model, self.sess)
                     if self.is_delayed_augmented_agent:
                         pending_actions_reshaped = np.expand_dims(pending_actions, axis=0)
+                    elif self.is_delayed_agent:
+                        pending_actions_reshaped = np.array(pending_actions)
                     else:
-                        pending_actions_reshaped = []
+                        pending_actions_reshaped = np.array([])
+                    # print(pending_actions_reshaped, pending_actions_reshaped.shape)
                     action = self.act(np.array(obs)[None], update_eps=update_eps,
                                       pending_actions=pending_actions_reshaped,
                                       **kwargs)[0]
@@ -414,17 +417,51 @@ class DelayedDQN(OffPolicyRLModel):
         return self, episode_rewards
 
     def predict(self, observation, state=None, mask=None, deterministic=True):
-        observation = np.array(observation)
-        vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
-
-        observation = observation.reshape((-1,) + self.observation_space.shape)
+        
+        kwargs = {"num_traj": self.num_traj}
+        # if not self.param_noise:
+        #     update_eps = self.exploration.value(self.num_timesteps)
+        #     update_param_noise_threshold = 0.
+        # else:
+        update_eps = 0.
+            # # Compute the threshold such that the KL divergence between perturbed and non-perturbed
+            # # policy is comparable to eps-greedy exploration with eps = exploration.value(t).
+            # # See Appendix C.1 in Parameter Space Noise for Exploration, Plappert et al., 2017
+            # # for detailed explanation.
+            # update_param_noise_threshold = \
+            #     -np.log(1. - self.exploration.value(self.num_timesteps) +
+            #             self.exploration.value(self.num_timesteps) / float(self.env.action_space.n))
+            # # kwargs['reset'] = reset
+            # kwargs['update_param_noise_threshold'] = update_param_noise_threshold
+            # kwargs['update_param_noise_scale'] = True
+        if self.is_delayed_agent:
+            kwargs['use_learned_forward_model'] = self.use_learned_forward_model
+            kwargs['forward_model'] = self.forward_model
         with self.sess.as_default():
-            actions, _, _ = self.step_model.step(observation, deterministic=deterministic)
+            pending_actions = self.env.get_pending_actions(self.pretrained_model, self.sess)
+            if self.is_delayed_augmented_agent:
+                pending_actions_reshaped = np.expand_dims(pending_actions, axis=0)
+            else:
+                pending_actions_reshaped = []
+            action = self.act(np.array(observation)[None], 
+                              stochastic = not deterministic,
+                              update_eps=0.,
+                                pending_actions=pending_actions_reshaped,
+                                **kwargs)[0]      
+            
+        return action, None
 
-        if not vectorized_env:
-            actions = actions[0]
+        # observation = np.array(observation)
+        # vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
 
-        return actions, None
+        # observation = observation.reshape((-1,) + self.observation_space.shape)
+        # with self.sess.as_default():
+        #     actions, _, _ = self.step_model.step(observation, deterministic=deterministic)
+
+        # if not vectorized_env:
+        #     actions = actions[0]
+
+        # return actions, None
 
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
         observation = np.array(observation)
@@ -486,6 +523,58 @@ class DelayedDQN(OffPolicyRLModel):
         params_to_save = self.get_parameters()
 
         self._save_to_file(save_path, data=data, params=params_to_save, cloudpickle=cloudpickle)
+
+    @classmethod
+    def load(cls, load_path, build_train, config, env=None, custom_objects=None, **kwargs):
+        """
+        Load the model from file
+
+        :param load_path: (str or file-like) the saved parameter location
+        :param env: (Gym Environment) the new environment to run the loaded model on
+            (can be None if you only need prediction from a trained model)
+        :param custom_objects: (dict) Dictionary of objects to replace
+            upon loading. If a variable is present in this dictionary as a
+            key, it will not be deserialized and the corresponding item
+            will be used instead. Similar to custom_objects in
+            `keras.models.load_model`. Useful when you have an object in
+            file that can not be deserialized.
+        :param kwargs: extra arguments to change the model when loading
+        """
+        data, params = cls._load_from_file(load_path, custom_objects=custom_objects)
+
+        if 'policy_kwargs' in kwargs and kwargs['policy_kwargs'] != data['policy_kwargs']:
+            raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
+                             "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
+                                                                  kwargs['policy_kwargs']))
+        model = cls(policy=data["policy"], 
+                    env=None, 
+                    _init_setup_model=False,
+                    build_train=build_train, 
+                    verbose=1, 
+                    train_freq=config.train_freq, 
+                    learning_rate=config.learning_rate,
+                    double_q=True, 
+                    target_network_update_freq=config.target_network_update_freq,
+                    gamma=config.gamma, 
+                    prioritized_replay=config.prioritized_replay, 
+                    exploration_initial_eps=config.exploration_initial_eps,
+                    exploration_final_eps=config.exploration_final_eps, 
+                    delay_value=config.delay_value,
+                    forward_model=env, 
+                    buffer_size=config.buffer_size, 
+                    load_pretrained_agent=config.load_pretrained_agent,
+                    is_delayed_agent=kwargs['is_delayed_agent'], 
+                    is_delayed_augmented_agent=kwargs['is_delayed_augmented_agent'], 
+                    num_traj = config.num_traj)
+                   # pytype: disable=not-instantiable
+        model.__dict__.update(data)
+        model.__dict__.update(kwargs)
+        model.set_env(env)
+        model.setup_model()
+
+        model.load_parameters(params)
+
+        return model
 
     def save_pretrained_model(self, save_path, cloudpickle=False):
         with self.graph.as_default():

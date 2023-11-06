@@ -1,3 +1,9 @@
+import warnings
+
+# Suppress all warnings
+warnings.filterwarnings("ignore")
+
+
 import gym
 import wandb
 from stable_baselines.common.vec_env import DummyVecEnv
@@ -6,15 +12,73 @@ from stable_baselines.common.policies import CnnLnLstmPolicy
 from stable_baselines import logger, A2C
 from stable_baselines import DQN
 from stable_baselines.deepq.policy_iteration import PI
-from stable_baselines.deepq.delayed_dqn import DelayedDQN, METHOD
+from stable_baselines.deepq.delayed_dqn import DelayedDQN
+
 from stable_baselines.common.atari_wrappers import make_atari, DelayWrapper, MaxAndSkipEnv, wrap_deepmind
-from stable_baselines.common.callbacks import CheckpointCallback
+from stable_baselines.common.callbacks import ModelSaveCallback
 from stable_baselines.common.vec_env import VecFrameStack, VecNormalize, SubprocVecEnv
 from functools import partial
 import numpy as np
 import sys
+import os
 
-env_name = sys.argv[1] + '-v0'
+
+
+import re
+
+def extract_info_from_directory_name(directory_name):
+    pattern = re.compile(r'(\w+)_(SMBS|Delayed_Q)_(\w+)-v0_d(\d+)_r(\d+\.\d{2})')
+    match = pattern.match(directory_name)
+
+    if match:
+        id, method_name, environment_name, delay_steps, randomness_factor = match.groups()
+        delay_steps = int(delay_steps)
+        randomness_factor = float(randomness_factor)
+        environment_name += '-v0'
+        return id, method_name, environment_name, delay_steps, randomness_factor
+    else:
+        raise ValueError(f"Invalid directory name format: {directory_name}.")
+    
+def load_newest_best_model(folder_path):
+    best_model_pattern = re.compile(r'best_(\d+)_steps.zip')
+    best_steps = 0
+    best_model_path = None
+
+    for file_name in os.listdir(folder_path):
+        match = best_model_pattern.match(file_name)
+        if match:
+            steps = int(match.group(1))
+            if steps > best_steps:
+                best_steps = steps
+                best_model_path = os.path.join(folder_path, file_name)
+
+    if best_model_path:
+        print(f'Loading best model with {best_steps} steps from {best_model_path}')
+        return best_model_path
+    else:
+        print('No best model found in the specified folder.')
+        return None
+
+# Example usage
+load_path = "zgty2wc5_SMBS_MsPacman-v0_d25_r0.20"
+load_path = sys.argv[1]
+use_wandb = True
+
+id, METHOD, env_name, delay_steps, randomness_factor = extract_info_from_directory_name(load_path)
+print(f'ID: {id}')
+print(f'Method Name: {METHOD}')
+print(f'Environment Name: {env_name}')
+print(f'Delay Steps: {delay_steps}')
+print(f'Randomness Factor: {randomness_factor}')
+
+
+if METHOD == "SMBS":
+    from stable_baselines.deepq.build_graph import build_train
+elif METHOD == "Delayed_Q":
+    from stable_baselines.deepq.build_graph_original import build_train
+else:
+    raise
+
 
 
 
@@ -30,7 +94,7 @@ def make_delayed_env(config):
     env = DelayWrapper(env, config.delay_value, config.clone_full_state)
     return env
 
-AGENT_NAME = 'agent_'
+AGENT_NAME = ''
 import platform
 if platform.system() == 'Darwin':
     import os
@@ -47,7 +111,7 @@ hyperparameter_defaults = dict(
     seed=1,
     env_name=env_name,#'Enduro-v0',#'MsPacman-v0', #'MsPacman-v0',
     gamma=0.99,
-    delay_value=25,
+    delay_value=delay_steps,
     buffer_size=50000,
     prioritized_replay=True,
     # fixed_frame_skip=True,
@@ -58,23 +122,34 @@ hyperparameter_defaults = dict(
     deepmind_wrapper=True,
     total_timesteps=int(2e6),
     num_traj=50,
-    sticky_action = 0.2,
+    sticky_action = randomness_factor,
     exp_name = f"Method_{METHOD}",
 )
-# Pass your defaults to wandb.init
-wandb.init(config=hyperparameter_defaults, project="stable_baselines_tf-rl_delay")
-# wandb.log(hyperparameter_defaults, commit = False)
+if use_wandb:
+    # Pass your defaults to wandb.init
+    wandb.init(config=hyperparameter_defaults, 
+            project="stable_baselines_tf-rl_delay_test", 
+            job_type='model_testing',
+            tags=f"{METHOD}_d{delay_steps}_r{randomness_factor}",
+            name=env_name+'_'+METHOD)
+    # wandb.log(hyperparameter_defaults, commit = False)
+else:
+    wandb.init(config=hyperparameter_defaults)
 print(hyperparameter_defaults)
 config = wandb.config
 
 
 #TODO: check if using fixed 4-frame skip is better
 # env = make_atari('BreakoutNoFrameskip-v4')
-agent_full_name = wandb.run.id + '_' + AGENT_NAME + METHOD + '_' + env_name
-# Save a checkpoint every 1000 steps
-# checkpoint_callback = CheckpointCallback(save_freq=30*1800, save_path='./logs/',
-#                                          name_prefix=agent_full_name)
-checkpoint_callback = None
+# agent_full_name = wandb.run.id + '_' + \
+#                     AGENT_NAME + METHOD + '_' + \
+#                     env_name + \
+#                     f"_d{hyperparameter_defaults['delay_value']}"  + \
+#                     f"_r{hyperparameter_defaults['sticky_action']:.2f}" 
+# # Save a checkpoint every 1000 steps
+# checkpoint_callback = ModelSaveCallback(save_path=f'./logs/{agent_full_name}/',
+#                                          name_prefix='best')
+# checkpoint_callback = None
 # model = DQN(LnCnnPolicy, env, verbose=1, train_freq=config.train_freq, learning_rate=config.learning_rate,
 #                 double_q=True, target_network_update_freq=config.target_network_update_freq,
 #             gamma=config.gamma, prioritized_replay=True, exploration_initial_eps=config.exploration_initial_eps,
@@ -95,27 +170,64 @@ else:
         is_delayed_agent = False
         is_delayed_augmented_agent = False
 
-    model = DelayedDQN(LnCnnPolicy, env, verbose=1, train_freq=config.train_freq, learning_rate=config.learning_rate,
-                    double_q=True, target_network_update_freq=config.target_network_update_freq,
-                gamma=config.gamma, prioritized_replay=config.prioritized_replay, exploration_initial_eps=config.exploration_initial_eps,
-                exploration_final_eps=config.exploration_final_eps, delay_value=config.delay_value,
-                       forward_model=env, buffer_size=config.buffer_size, load_pretrained_agent=config.load_pretrained_agent,
-                       is_delayed_agent=is_delayed_agent, is_delayed_augmented_agent=is_delayed_augmented_agent, num_traj = config.num_traj)
+    model_path = load_newest_best_model(os.path.join('./logs', load_path))
 
-_, episode_rewards = model.learn(total_timesteps=config.total_timesteps, callback=checkpoint_callback)
-tot_ep_num = len(episode_rewards)
-avg_over = round(tot_ep_num * AVERAGE_OVER_LAST_EP)
-final_avg_score = np.mean(episode_rewards[-avg_over:])
-wandb.log({'final_score': final_avg_score})
+    model = DelayedDQN.load(model_path, 
+                            build_train, 
+                            config, 
+                            env = env,
+                            is_delayed_agent = is_delayed_agent, 
+                            is_delayed_augmented_agent = is_delayed_augmented_agent)
+    # model = DelayedDQN(LnCnnPolicy, 
+    #                    env, 
+    #                    build_train=build_train, 
+    #                    verbose=1, 
+    #                    train_freq=config.train_freq, 
+    #                    learning_rate=config.learning_rate,
+    #                    double_q=True, 
+    #                    target_network_update_freq=config.target_network_update_freq,
+    #                     gamma=config.gamma, 
+    #                     prioritized_replay=config.prioritized_replay, 
+    #                     exploration_initial_eps=config.exploration_initial_eps,
+    #                     exploration_final_eps=config.exploration_final_eps, 
+    #                     delay_value=config.delay_value,
+    #                    forward_model=env, 
+    #                    buffer_size=config.buffer_size, 
+    #                    load_pretrained_agent=config.load_pretrained_agent,
+    #                    is_delayed_agent=is_delayed_agent, 
+    #                    is_delayed_augmented_agent=is_delayed_augmented_agent, 
+    #                    num_traj = config.num_traj)
 
-model.save(agent_full_name+'_final')
+# _, episode_rewards = model.learn(total_timesteps=config.total_timesteps, callback=checkpoint_callback)
+# tot_ep_num = len(episode_rewards)
+# avg_over = round(tot_ep_num * AVERAGE_OVER_LAST_EP)
+# final_avg_score = np.mean(episode_rewards[-avg_over:])
+# wandb.log({'final_score': final_avg_score})
+
+# path = os.path.join(checkpoint_callback.save_path, 'final')
+# model.save(path)
 
 # del model # remove to demonstrate saving and loading
 #
-# model = DelayedDQN.load("deepq_cartpole")
-#
-# obs = env.reset()
-# while True:
-#     action, _states = model.predict(obs)
-#     obs, rewards, dones, info = env.step(action)
-#     env.render()
+
+# quit()
+menv = model.env
+obs = menv.reset()
+rew = []
+for _ in range(1000):
+    rew.append(0.)
+    while True:
+        action, _states = model.predict(obs)
+        obs, rewards, dones, info = menv.step(action)
+        # print(rewards, dones)
+        rew[-1] += rewards
+        if dones:
+            wandb.log({'episode_reward': rew[-1]})
+            # print(rew[-1])
+            obs = menv.reset()
+            break
+
+        # env.render()
+        
+wandb.log({'mean_reward': np.mean(rew)})
+np.save(os.path.join('./logs', load_path, "eval_results.npy"), rew)

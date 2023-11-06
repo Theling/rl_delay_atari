@@ -19,11 +19,17 @@ import os
 env_name = sys.argv[1] + '-v0'
 METHOD = "SMBS" 
 # METHOD = "Delayed_Q"
+# METHOD = "AMDP"
 
 if METHOD == "SMBS":
     from stable_baselines.deepq.build_graph import build_train
+    agent_type = "delayed"
 elif METHOD == "Delayed_Q":
     from stable_baselines.deepq.build_graph_original import build_train
+    agent_type = "delayed"
+elif METHOD == "AMDP":
+    from stable_baselines.deepq.build_graph_original import build_train
+    agent_type = "augmented"
 else:
     raise
 
@@ -63,16 +69,16 @@ hyperparameter_defaults = dict(
     # fixed_frame_skip=True,
     clone_full_state=False,
     load_pretrained_agent=False,
-    agent_type='delayed', #'delayed', 'augmented', 'oblivious', 'rnn'
+    agent_type=agent_type,#'delayed', #'delayed', 'augmented', 'oblivious', 'rnn'
     num_rnn_envs=4,
     deepmind_wrapper=True,
-    total_timesteps=int(2e6),
-    num_traj=50,
+    total_timesteps=int(1e6),
+    num_traj=20,
     sticky_action = 0.2,
     exp_name = f"Method_{METHOD}",
 )
 # Pass your defaults to wandb.init
-wandb.init(config=hyperparameter_defaults, project="stable_baselines_tf-rl_delay")
+wandb.init(config=hyperparameter_defaults, project="stable_baselines_tf-rl_delay-new")
 # wandb.log(hyperparameter_defaults, commit = False)
 print(hyperparameter_defaults)
 config = wandb.config
@@ -83,10 +89,10 @@ config = wandb.config
 agent_full_name = wandb.run.id + '_' + \
                     AGENT_NAME + METHOD + '_' + \
                     env_name + \
-                    "_d" + hyperparameter_defaults['delay_value'] + \
+                    f"_d{hyperparameter_defaults['delay_value']}"  + \
                     f"_r{hyperparameter_defaults['sticky_action']:.2f}" 
 # Save a checkpoint every 1000 steps
-checkpoint_callback = ModelSaveCallback(save_path=f'./logs/{agent_full_name}/',
+checkpoint_callback = ModelSaveCallback(save_path=f'./logs_new/{agent_full_name}/',
                                          name_prefix='best')
 # checkpoint_callback = None
 # model = DQN(LnCnnPolicy, env, verbose=1, train_freq=config.train_freq, learning_rate=config.learning_rate,

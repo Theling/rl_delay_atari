@@ -176,29 +176,33 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
                     
                 num_traj = kwargs['num_traj']
                 last_states = []
+                # print(pending_actions)
                 for traj in range(num_traj):
                     last_state = obs
                     for i, curr_action in enumerate(pending_actions):
+                        # print("-", end = '')
                         last_state_temp = forward_model.get_next_state(state=last_state, action=curr_action)
                         if last_state_temp is None:
                             break
                         last_state = last_state_temp
-                    last_states.append(last_state)
+                    last_states.append(np.array(last_state).squeeze())
                     if not use_learned_forward_model:
                         forward_model.restore_initial_state()
-                last_state = np.array(last_states).squeeze()
-                # print(last_state.shape)
-                
+                last_state = np.array(last_states)
+                # print((last_state[0] - last_state[-1]).sum())
                 if not use_learned_forward_model:
                     forward_model.restore_initial_state()
-                if len(last_state.shape) < 4:
-                    last_state = np.array(last_state)[None]
+                # if len(last_state.shape) < 4:
+                #     last_state = np.array(last_state)[None]
+                # print(last_state.shape)
                 pending_actions_empty = np.asarray([])[None]
                 dir_action, q_values, chose_random, random_actions = _act(last_state, stochastic, update_eps, pending_actions_empty)
+                # print(q_values.mean(axis = 0).shape)
                 expected_action_val = q_values.mean(axis = 0)# -alpha*q_val.std(axis = 0)
                 action =  expected_action_val.argmax()
                 
-                action = random_actions[-1] if chose_random[-1] else action
+                if stochastic:
+                    action = random_actions[-1] if chose_random[-1] else action
                 
                 # print(abs(q_values[0, :] - q_values[-1, :]))
                 # print(q_values.shape, expected_action_val, action, dir_action.mean(), chose_random.shape, random_actions.shape )
