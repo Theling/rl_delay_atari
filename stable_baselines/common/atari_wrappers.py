@@ -262,7 +262,7 @@ class FrameStack(gym.Wrapper):
         return self._get_ob(), reward, done, info
 
     def _get_ob(self):
-        assert len(self.frames) == self.n_frames
+        assert len(self.frames) == self.n_frames, f"{len(self.frames)} != {self.n_frames}"
         return LazyFrames(list(self.frames))
 
 
@@ -312,7 +312,7 @@ class DelayWrapper(gym.Env):
                 # estimated_action = self._pretained_act(pretrained_model, sess, curr_state)
                 estimated_action = np.random.choice(self.action_space.n)
                 self.pending_actions.append(estimated_action)
-                curr_state = self.get_next_state(state=None, action=estimated_action)
+                # curr_state = self.get_next_state(state=None, action=estimated_action)
                 if curr_state is None:
                     break
             self.restore_initial_state()
@@ -331,6 +331,13 @@ class DelayWrapper(gym.Env):
                 self.stored_init_state = self.orig_env.clone_full_state()
             else:
                 self.stored_init_state = self.orig_env.clone_state()
+                # print("store!")
+        else:
+            self.stored_init_state = self.orig_env.unwrapped.state
+    
+    def store_initial_state_full(self):
+        if self.is_atari_env:
+            self.stored_init_state_full = self.orig_env.clone_full_state()
         else:
             self.stored_init_state = self.orig_env.unwrapped.state
 
@@ -340,6 +347,13 @@ class DelayWrapper(gym.Env):
                 self.orig_env.restore_full_state(self.stored_init_state)
             else:
                 self.orig_env.restore_state(self.stored_init_state)
+                # print("restore")
+        else:
+            self.orig_env.unwrapped.state = self.stored_init_state
+    
+    def restore_initial_state_full(self):
+        if self.is_atari_env:
+            self.orig_env.restore_full_state(self.stored_init_state_full)
         else:
             self.orig_env.unwrapped.state = self.stored_init_state
 

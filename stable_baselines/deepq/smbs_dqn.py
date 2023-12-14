@@ -9,7 +9,7 @@ from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, Ten
 from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.common.schedules import LinearSchedule
 from stable_baselines.common.buffers import ReplayBuffer, PrioritizedReplayBuffer
-# from stable_baselines.deepq.build_graph import build_train; METHOD = "SMBS"
+from stable_baselines.deepq.build_graph import build_train; METHOD = "SMBS"
 # from stable_baselines.deepq.build_graph_original import build_train; METHOD = "Delayed_Q"
 from stable_baselines.deepq.policies import DQNPolicy
 import wandb
@@ -59,7 +59,7 @@ class DelayedDQN(OffPolicyRLModel):
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
     """
-    def __init__(self, policy, env, build_train, gamma=0.99, learning_rate=5e-4, buffer_size=50000, exploration_fraction=0.1,
+    def __init__(self, policy, env, gamma=0.99, learning_rate=5e-4, buffer_size=50000, exploration_fraction=0.1,
                  exploration_final_eps=0.02, exploration_initial_eps=1.0, train_freq=1, batch_size=32, double_q=True,
                  learning_starts=1000, target_network_update_freq=500, prioritized_replay=False,
                  prioritized_replay_alpha=0.6, prioritized_replay_beta0=0.4, prioritized_replay_beta_iters=None,
@@ -67,7 +67,7 @@ class DelayedDQN(OffPolicyRLModel):
                  n_cpu_tf_sess=None, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, seed=None,
                  delay_value=0, forward_model=None, load_pretrained_agent=True, is_delayed_agent=True,
-                 is_delayed_augmented_agent=False, num_traj = 50):
+                 is_delayed_augmented_agent=False, num_traj = 20):
 
         policy = partial(policy, is_delayed_agent=is_delayed_agent,
                          is_delayed_augmented_agent=is_delayed_augmented_agent, delay_value=delay_value)
@@ -76,7 +76,6 @@ class DelayedDQN(OffPolicyRLModel):
         super(DelayedDQN, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, policy_base=DQNPolicy,
                                   requires_vec_env=False, policy_kwargs=policy_kwargs, seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
 
-        self.build_train = build_train
         self.param_noise = param_noise
         self.learning_starts = learning_starts
         self.train_freq = train_freq
@@ -156,7 +155,7 @@ class DelayedDQN(OffPolicyRLModel):
 
                 optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
 
-                self.act, self._train_step, self.update_target, self.step_model, self.pretrained_model = self.build_train(
+                self.act, self._train_step, self.update_target, self.step_model, self.pretrained_model = build_train(
                     q_func=partial(self.policy, **self.policy_kwargs),
                     ob_space=self.observation_space,
                     ac_space=self.action_space,
@@ -225,7 +224,6 @@ class DelayedDQN(OffPolicyRLModel):
                                               final_p=self.exploration_final_eps)
 
             episode_rewards = [0.0]
-            # safe_mean_50 = lambda rewards: np.mean(episode_rewards) if len(episode_rewards) < 50 else np.mean(episode_rewards[-50:-1])
             episode_successes = []
 
             callback.on_training_start(locals(), globals())
@@ -243,7 +241,6 @@ class DelayedDQN(OffPolicyRLModel):
                     # self.load_pretrained_model('pretrained_delay_0_step_' + str(timestep))
 
                 # Take action and update exploration to the newest value
-                # print("----")
                 kwargs = {"num_traj": self.num_traj}
                 if not self.param_noise:
                     update_eps = self.exploration.value(self.num_timesteps)
@@ -265,14 +262,10 @@ class DelayedDQN(OffPolicyRLModel):
                     kwargs['forward_model'] = self.forward_model
                 with self.sess.as_default():
                     pending_actions = self.env.get_pending_actions(self.pretrained_model, self.sess)
-                    
                     if self.is_delayed_augmented_agent:
-                        pending_actions_reshaped = np.array(pending_actions).reshape(1, -1) #np.expand_dims(pending_actions, axis=0)
-                    elif self.is_delayed_agent:
-                        pending_actions_reshaped = np.array(pending_actions)
+                        pending_actions_reshaped = np.expand_dims(pending_actions, axis=0)
                     else:
-                        pending_actions_reshaped = np.array([])
-                    # print(pending_actions_reshaped, pending_actions_reshaped.shape)
+                        pending_actions_reshaped = []
                     action = self.act(np.array(obs)[None], update_eps=update_eps,
                                       pending_actions=pending_actions_reshaped,
                                       **kwargs)[0]
@@ -282,8 +275,7 @@ class DelayedDQN(OffPolicyRLModel):
                 env_action = action
                 reset = False
                 new_obs, rew, done, info = self.env.step(env_action)
-                # print(action, rew, done)
-                
+
                 self.num_timesteps += 1
 
                 # Stop training if return value is False
@@ -321,7 +313,6 @@ class DelayedDQN(OffPolicyRLModel):
 
                 episode_rewards[-1] += reward_
                 if done:
-                    # print("---------done------------")
                     maybe_is_success = info.get('is_success')
                     if maybe_is_success is not None:
                         episode_successes.append(float(maybe_is_success))
@@ -329,7 +320,6 @@ class DelayedDQN(OffPolicyRLModel):
                         obs = self.env.reset()
                     self.sample_buffer.clear()
                     wandb.log({'episodic_reward': episode_rewards[-1]}, step=self.num_timesteps)
-                    wandb.log({'mean_episodic_reward': np.mean(episode_rewards[-50:])}, step=self.num_timesteps)
                     # print('episodic_reward: {}'.format(episode_rewards[-1]))
                     episode_rewards.append(0.0)
                     reset = True
@@ -373,12 +363,10 @@ class DelayedDQN(OffPolicyRLModel):
                     else:
                         try:
                             if self.is_delayed_augmented_agent:
-                                pending_t = np.asarray([obses_t[i][1] for i in range(obses_t.shape[0])]).squeeze()
+                                pending_t = np.asarray([obses_t[i][1] for i in range(obses_t.shape[0])])
                                 obses_t = np.asarray([obses_t[i][0] for i in range(obses_t.shape[0])])
-                                pending_tp1 = np.asarray([obses_tp1[i][1] for i in range(obses_tp1.shape[0])]).squeeze()
+                                pending_tp1 = np.asarray([obses_tp1[i][1] for i in range(obses_tp1.shape[0])])
                                 obses_tp1 = np.asarray([obses_tp1[i][0] for i in range(obses_tp1.shape[0])])
-                                actions = np.asarray(actions).squeeze()
-                                print(pending_t.shape, pending_tp1.shape)
                             else:
                                 pending_t = np.zeros((obses_t.shape[0], 0))
                                 pending_tp1 = np.zeros((obses_t.shape[0], 0))
@@ -399,13 +387,10 @@ class DelayedDQN(OffPolicyRLModel):
                     # Update target network periodically.
                     self.update_target(sess=self.sess)
 
-                if len(episode_rewards[-101:-1]) == 0 or timestep/total_timesteps < 0.1:
-                    max_mean_100ep_reward = mean_100ep_reward = -np.inf
+                if len(episode_rewards[-101:-1]) == 0:
+                    mean_100ep_reward = -np.inf
                 else:
-                    mean_100ep_reward = round(float(np.mean(episode_rewards[-101:-1])), 3)
-                    if mean_100ep_reward > max_mean_100ep_reward:
-                        max_mean_100ep_reward = mean_100ep_reward
-                        callback.call('save')
+                    mean_100ep_reward = round(float(np.mean(episode_rewards[-101:-1])), 1)
                 # print(update_eps)
                 num_episodes = len(episode_rewards)
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
@@ -414,7 +399,6 @@ class DelayedDQN(OffPolicyRLModel):
                     if len(episode_successes) > 0:
                         logger.logkv("success rate", np.mean(episode_successes[-100:]))
                     logger.record_tabular("mean 100 episode reward", mean_100ep_reward)
-                    logger.record_tabular("max mean 100 episode reward", max_mean_100ep_reward)
                     logger.record_tabular("% time spent exploring",
                                           int(100 * self.exploration.value(self.num_timesteps)))
                     logger.dump_tabular()
@@ -423,63 +407,17 @@ class DelayedDQN(OffPolicyRLModel):
         return self, episode_rewards
 
     def predict(self, observation, state=None, mask=None, deterministic=True):
-        
-        kwargs = {"num_traj": self.num_traj}
-        # if not self.param_noise:
-        #     update_eps = self.exploration.value(self.num_timesteps)
-        #     update_param_noise_threshold = 0.
-        # else:
-        update_eps = 0.
-            # # Compute the threshold such that the KL divergence between perturbed and non-perturbed
-            # # policy is comparable to eps-greedy exploration with eps = exploration.value(t).
-            # # See Appendix C.1 in Parameter Space Noise for Exploration, Plappert et al., 2017
-            # # for detailed explanation.
-            # update_param_noise_threshold = \
-            #     -np.log(1. - self.exploration.value(self.num_timesteps) +
-            #             self.exploration.value(self.num_timesteps) / float(self.env.action_space.n))
-            # # kwargs['reset'] = reset
-            # kwargs['update_param_noise_threshold'] = update_param_noise_threshold
-            # kwargs['update_param_noise_scale'] = True
-        if self.is_delayed_agent:
-            kwargs['use_learned_forward_model'] = self.use_learned_forward_model
-            kwargs['forward_model'] = self.forward_model
+        observation = np.array(observation)
+        vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
+
+        observation = observation.reshape((-1,) + self.observation_space.shape)
         with self.sess.as_default():
-            # pending_actions = self.env.get_pending_actions(self.pretrained_model, self.sess)
-            # if self.is_delayed_augmented_agent:
-            #     pending_actions_reshaped = np.expand_dims(pending_actions, axis=0)
-            # elif self.is_delayed_agent:
-            #     pending_actions_reshaped = np.array(pending_actions)
-            # else:
-            #     pending_actions_reshaped = np.array([])
-                
-            pending_actions = self.env.get_pending_actions(self.pretrained_model, self.sess)
-                    
-            if self.is_delayed_augmented_agent:
-                pending_actions_reshaped = np.array(pending_actions).reshape(1, -1) #np.expand_dims(pending_actions, axis=0)
-            elif self.is_delayed_agent:
-                pending_actions_reshaped = np.array(pending_actions)
-            else:
-                pending_actions_reshaped = np.array([])
-                
-            action = self.act(np.array(observation)[None], 
-                              stochastic = not deterministic,
-                              update_eps=0.,
-                                pending_actions=pending_actions_reshaped,
-                                **kwargs)[0]      
-            
-        return action, None
+            actions, _, _ = self.step_model.step(observation, deterministic=deterministic)
 
-        # observation = np.array(observation)
-        # vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
+        if not vectorized_env:
+            actions = actions[0]
 
-        # observation = observation.reshape((-1,) + self.observation_space.shape)
-        # with self.sess.as_default():
-        #     actions, _, _ = self.step_model.step(observation, deterministic=deterministic)
-
-        # if not vectorized_env:
-        #     actions = actions[0]
-
-        # return actions, None
+        return actions, None
 
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
         observation = np.array(observation)
@@ -541,58 +479,6 @@ class DelayedDQN(OffPolicyRLModel):
         params_to_save = self.get_parameters()
 
         self._save_to_file(save_path, data=data, params=params_to_save, cloudpickle=cloudpickle)
-
-    @classmethod
-    def load(cls, load_path, build_train, config, env=None, custom_objects=None, **kwargs):
-        """
-        Load the model from file
-
-        :param load_path: (str or file-like) the saved parameter location
-        :param env: (Gym Environment) the new environment to run the loaded model on
-            (can be None if you only need prediction from a trained model)
-        :param custom_objects: (dict) Dictionary of objects to replace
-            upon loading. If a variable is present in this dictionary as a
-            key, it will not be deserialized and the corresponding item
-            will be used instead. Similar to custom_objects in
-            `keras.models.load_model`. Useful when you have an object in
-            file that can not be deserialized.
-        :param kwargs: extra arguments to change the model when loading
-        """
-        data, params = cls._load_from_file(load_path, custom_objects=custom_objects)
-
-        if 'policy_kwargs' in kwargs and kwargs['policy_kwargs'] != data['policy_kwargs']:
-            raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
-                             "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
-                                                                  kwargs['policy_kwargs']))
-        model = cls(policy=data["policy"], 
-                    env=None, 
-                    _init_setup_model=False,
-                    build_train=build_train, 
-                    verbose=1, 
-                    train_freq=config.train_freq, 
-                    learning_rate=config.learning_rate,
-                    double_q=True, 
-                    target_network_update_freq=config.target_network_update_freq,
-                    gamma=config.gamma, 
-                    prioritized_replay=config.prioritized_replay, 
-                    exploration_initial_eps=config.exploration_initial_eps,
-                    exploration_final_eps=config.exploration_final_eps, 
-                    delay_value=config.delay_value,
-                    forward_model=env, 
-                    buffer_size=config.buffer_size, 
-                    load_pretrained_agent=config.load_pretrained_agent,
-                    is_delayed_agent=kwargs['is_delayed_agent'], 
-                    is_delayed_augmented_agent=kwargs['is_delayed_augmented_agent'], 
-                    num_traj = config.num_traj)
-                   # pytype: disable=not-instantiable
-        model.__dict__.update(data)
-        model.__dict__.update(kwargs)
-        model.set_env(env)
-        model.setup_model()
-
-        model.load_parameters(params)
-
-        return model
 
     def save_pretrained_model(self, save_path, cloudpickle=False):
         with self.graph.as_default():

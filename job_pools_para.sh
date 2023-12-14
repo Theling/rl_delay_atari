@@ -8,11 +8,10 @@ QUEUE=(
     "python run_experiment_rl_delay.py  RoadRunner"
     "python run_experiment_rl_delay.py  StarGunner"
     "python run_experiment_rl_delay.py  TimePilot"
-    "python run_experiment_rl_delay.py  Zaxxon"
+    # "python run_experiment_rl_delay.py  Zaxxon"
     "python run_experiment_rl_delay.py  MsPacman"
     "python run_experiment_rl_delay.py  Qbert"
     "python run_experiment_rl_delay.py  NameThisGame"
-    "python run_experiment_rl_delay.py  Pong"
     "python run_experiment_rl_delay.py  Freeway"
     # Add more programs and arguments as needed
 )

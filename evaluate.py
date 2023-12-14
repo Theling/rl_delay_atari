@@ -1,4 +1,5 @@
 import warnings
+from tqdm import tqdm
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
@@ -27,11 +28,13 @@ import os
 import re
 
 def extract_info_from_directory_name(directory_name):
-    pattern = re.compile(r'(\w+)_(SMBS|Delayed_Q)_(\w+)-v0_d(\d+)_r(\d+\.\d{2})')
+    pattern = re.compile(r'(AMDP|SMBS|Delayed_Q)_(\w+)-v0_d(\d+)_r(\d+\.\d{2})_(\w+)')
+    # pattern = re.compile(r'(AMDP)_(\w+)-v0_d(\d+)_r(\d+\.\d{2})_(\w+)')
+    
     match = pattern.match(directory_name)
 
     if match:
-        id, method_name, environment_name, delay_steps, randomness_factor = match.groups()
+        method_name, environment_name, delay_steps, randomness_factor, id = match.groups()
         delay_steps = int(delay_steps)
         randomness_factor = float(randomness_factor)
         environment_name += '-v0'
@@ -39,6 +42,12 @@ def extract_info_from_directory_name(directory_name):
     else:
         raise ValueError(f"Invalid directory name format: {directory_name}.")
     
+def is_evaluated(folder_path):
+    for file_name in os.listdir(folder_path):
+        if file_name == "eval_results2.npy":
+            return True
+    return False
+
 def load_newest_best_model(folder_path):
     best_model_pattern = re.compile(r'best_(\d+)_steps.zip')
     best_steps = 0
@@ -58,11 +67,30 @@ def load_newest_best_model(folder_path):
     else:
         print('No best model found in the specified folder.')
         return None
+    
+def load_final_model(folder_path):
+    final_model_path = None
+    for file_name in os.listdir(folder_path):
+        if 'final' in file_name:
+            final_model_path = os.path.join(folder_path, file_name)
+            break
+
+    if final_model_path:
+        print(f'Loading final model from {final_model_path}')
+        return final_model_path
+    else:
+        print('No best model found in the specified folder.')
+        return None
 
 # Example usage
 load_path = "zgty2wc5_SMBS_MsPacman-v0_d25_r0.20"
+log_dir = './logs_new2/'
+load_best = False
 load_path = sys.argv[1]
 use_wandb = True
+
+if is_evaluated(os.path.join(log_dir, load_path)): 
+    quit()
 
 id, METHOD, env_name, delay_steps, randomness_factor = extract_info_from_directory_name(load_path)
 print(f'ID: {id}')
@@ -74,8 +102,13 @@ print(f'Randomness Factor: {randomness_factor}')
 
 if METHOD == "SMBS":
     from stable_baselines.deepq.build_graph import build_train
+    agent_type = "delayed"
 elif METHOD == "Delayed_Q":
     from stable_baselines.deepq.build_graph_original import build_train
+    agent_type = "delayed"
+elif METHOD == "AMDP":
+    from stable_baselines.deepq.build_graph_original import build_train
+    agent_type = "augmented"
 else:
     raise
 
@@ -117,7 +150,7 @@ hyperparameter_defaults = dict(
     # fixed_frame_skip=True,
     clone_full_state=False,
     load_pretrained_agent=False,
-    agent_type='delayed', #'delayed', 'augmented', 'oblivious', 'rnn'
+    agent_type=agent_type, #'delayed', 'augmented', 'oblivious', 'rnn'
     num_rnn_envs=4,
     deepmind_wrapper=True,
     total_timesteps=int(2e6),
@@ -170,8 +203,13 @@ else:
         is_delayed_agent = False
         is_delayed_augmented_agent = False
 
-    model_path = load_newest_best_model(os.path.join('./logs', load_path))
-
+    if load_best:
+        model_path = load_newest_best_model(os.path.join(log_dir, load_path))
+        save_name = "eval_results.npy"
+    else:
+        model_path = load_final_model(os.path.join(log_dir, load_path))
+        save_name = "eval_results2.npy"
+    
     model = DelayedDQN.load(model_path, 
                             build_train, 
                             config, 
@@ -213,21 +251,22 @@ else:
 # quit()
 menv = model.env
 obs = menv.reset()
-rew = []
-for _ in range(1000):
-    rew.append(0.)
-    while True:
-        action, _states = model.predict(obs)
-        obs, rewards, dones, info = menv.step(action)
-        # print(rewards, dones)
-        rew[-1] += rewards
-        if dones:
-            wandb.log({'episode_reward': rew[-1]})
-            # print(rew[-1])
-            obs = menv.reset()
-            break
+rew = [0.]
+rew_step = []
+for _ in tqdm(range(100000), desc='Evaluation', unit='iteration'):
+
+    action, _states = model.predict(obs)
+    obs, rewards, dones, info = menv.step(action)
+    # print(rewards, dones)
+    rew[-1] += rewards
+    rew_step.append(rewards)
+    if dones:
+        wandb.log({'episode_reward': rew[-1]})
+        # print(rew[-1])
+        obs = menv.reset()
+        rew.append(0.)
 
         # env.render()
         
-wandb.log({'mean_reward': np.mean(rew)})
-np.save(os.path.join('./logs', load_path, "eval_results.npy"), rew)
+wandb.log({'mean_reward': np.mean(rew), "reward_step": np.array(rew_step)})
+np.save(os.path.join('./logs_new2/', load_path, save_name), rew)

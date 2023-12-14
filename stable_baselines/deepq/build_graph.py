@@ -170,10 +170,8 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
             def act(obs, stochastic=True, update_eps=-1, pending_actions=None, **kwargs):
                 use_learned_forward_model = kwargs['use_learned_forward_model']
                 forward_model = kwargs['forward_model']
-                
                 if not use_learned_forward_model:
                     forward_model.store_initial_state()
-                    
                 num_traj = kwargs['num_traj']
                 last_states = []
                 # print(pending_actions)
@@ -185,11 +183,12 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
                         if last_state_temp is None:
                             break
                         last_state = last_state_temp
-                    last_states.append(np.array(last_state).squeeze())
+                    tmp = np.array(last_state).squeeze()
+                    # print(tmp.shape, np.array(last_state).shape)
+                    last_states.append(tmp)
                     if not use_learned_forward_model:
                         forward_model.restore_initial_state()
                 last_state = np.array(last_states)
-                # print((last_state[0] - last_state[-1]).sum())
                 if not use_learned_forward_model:
                     forward_model.restore_initial_state()
                 # if len(last_state.shape) < 4:
@@ -203,7 +202,7 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
                 
                 if stochastic:
                     action = random_actions[-1] if chose_random[-1] else action
-                
+                # print(action)
                 # print(abs(q_values[0, :] - q_values[-1, :]))
                 # print(q_values.shape, expected_action_val, action, dir_action.mean(), chose_random.shape, random_actions.shape )
                 return [action]

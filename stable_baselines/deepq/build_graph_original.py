@@ -181,7 +181,7 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
                 if not use_learned_forward_model:
                     forward_model.restore_initial_state()
                 # if len(last_state.shape) < 4:
-                last_state = np.array(last_state)[None]
+                last_state = np.array(last_state).squeeze()[None]
                 # print(last_state.shape)
                 pending_actions_empty = np.asarray([])[None]
                 action, q_values =  _act(last_state, stochastic, update_eps, pending_actions_empty)
