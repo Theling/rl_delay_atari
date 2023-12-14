@@ -40,3 +40,10 @@ src
 .cache
 
 MUJOCO_LOG.TXT
+
+
+*.npy
+wandb/
+Roms/
+
+output.txt
